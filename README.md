@@ -13,7 +13,7 @@ Install golang 1.16 or later.
 
 ### Running the repo
 Clone this repo.
-Make sure gcc has been installed; if not, run
+Make sure gcc has been installed; if not, run the following (Linux)
 ```bash
 sudo apt install build-essential
 ```
