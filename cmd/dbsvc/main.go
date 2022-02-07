@@ -3,9 +3,9 @@ package main
 import (
 	"flag"
 
-	"github.com/daniel-stud/anomalies/network"
-	"github.com/daniel-stud/anomalies/server"
-	"github.com/daniel-stud/anomalies/tables"
+	"github.com/tap-group/tdsvc/network"
+	"github.com/tap-group/tdsvc/server"
+	"github.com/tap-group/tdsvc/tables"
 )
 
 func main() {
