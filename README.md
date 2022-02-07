@@ -13,6 +13,10 @@ Install golang 1.16 or later.
 
 ### Running the repo
 Clone this repo.
+Make sure gcc has been installed; if not, run
+```bash
+sudo apt install build-essential
+```
 Download dependencies inside the repo directory.
 ```bash
 go mod tidy
