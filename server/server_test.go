@@ -32,7 +32,7 @@ func TestSizeCompare(t *testing.T) {
 
 	// add nEpochs entries in one go
 	factory := new(tables.TableFactory)
-	factory.CreateTableWithRandomMissingForExperiment(filename, nUsers, nDistricts, nEpochs, 0, 20, 2000, tables.UNIF_ZERO_TO_ND)
+	factory.CreateTableForExperiment(filename, nUsers, nDistricts, nEpochs, 0, 20, 5, 2000, tables.UNIF_ZERO_TO_ND, 0)
 
 	server := new(Server)
 	columnNames := server.InitializeSqlTable(filename, tablename)
@@ -46,14 +46,14 @@ func TestSizeCompare(t *testing.T) {
 
 	// add nEpochs entries step-by-step
 	factory = new(tables.TableFactory)
-	factory.CreateTableWithRandomMissingForExperiment(filename, nUsers, nDistricts, 1, 0, 20, 2000, tables.UNIF_ZERO_TO_ND)
+	factory.CreateTableForExperiment(filename, nUsers, nDistricts, 1, 0, 20, 5, 2000, tables.UNIF_ZERO_TO_ND, 0)
 	server = new(Server)
 	columnNames = server.InitializeSqlTable(filename, tablename)
 	server.InitializeTree(columnNames, tablename, 0, 3, 4, 6, []uint32{1, 2})
 
 	for i := 1; i < nEpochs; i++ {
 		valRange := [][]uint32{{uint32(i), uint32(i + 1)}, {0, math.MaxInt32}, {0, math.MaxInt32}}
-		factory.RegenerateTableWithRandomMissingForExperiment(filename, 1, i, 20, 2000, tables.UNIF_ZERO_TO_ND)
+		factory.RegenerateTableForExperiment(filename, 1, i, 20, 2000, tables.UNIF_ZERO_TO_ND, 0)
 		columnNames = server.AddToSqlTable(filename, tablename)
 		server.AddToTree(columnNames, tablename, valRange)
 	}

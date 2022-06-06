@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"database/sql"
@@ -25,6 +26,8 @@ import (
 
 const BP_MAX = 10000000 // maximum value in the column with index dataRowIdx
 const N_MOMENTS = 3     // 1 for just sums, 2 for sum of squares, 3 for sum of cubes, etc
+const MAX_THREADS = 100
+const MAX_ENTRIES_PER_INSERT = 100
 
 type Server struct {
 	columnNames []string
@@ -33,23 +36,42 @@ type Server struct {
 	timeRowIdx,
 	dataRowIdx,
 	seedRowIdx uint32
-	miscFieldsIdxs []uint32
+	typeFieldsIdxs []uint32
 
 	prefixTree      *trees.PrefixTree
 	prefixes        [][]byte
 	commitmentTrees [][]byte
+
+	// the following variables are for benchmarking (intended for single-thread exec):
 
 	prefixReceiveRequestTime int64
 	prefixSendResponseTime   int64
 	queryReceiveRequestTime  int64
 	querySendResponseTime    int64
 
+	buildTreeTime   int64
+	buildProofsTime int64
+
 	sqlDuration             int64
 	buildCommitmentDuration int64
 }
 
+type SumTreeData struct {
+	prefix   []byte
+	timeVal  uint32
+	typeVals []uint32
+}
+
 func (server *Server) GetSqlDuration() int64 {
 	return server.sqlDuration
+}
+
+func (server *Server) GetBuildTreeTime() int64 {
+	return server.buildTreeTime
+}
+
+func (server *Server) GetBuildProofsTime() int64 {
+	return server.buildProofsTime
 }
 
 func (server *Server) GetBuildCommitmentDuration() int64 {
@@ -65,12 +87,18 @@ func (server *Server) GetLatestTimestamps() (int64, int64, int64, int64) {
 	return server.prefixReceiveRequestTime, server.prefixSendResponseTime, server.queryReceiveRequestTime, server.querySendResponseTime
 }
 
+// ResetTimestamps resets all the time counters that are used for tracing
+
 func (server *Server) ResetTimestamps() {
 	server.prefixReceiveRequestTime = time.Now().UnixNano()
 	server.prefixSendResponseTime = time.Now().UnixNano()
 	server.queryReceiveRequestTime = time.Now().UnixNano()
 	server.querySendResponseTime = time.Now().UnixNano()
 }
+
+// LoadTable loads a table from a file and returns the values and column names
+// It takes the file's path as a string as input and returns the values and column names as a 2-dimensional int slice and a string slice
+// In the current implementation, LoadTable is used to load tables before inserting them into the MySQL database
 
 func LoadTable(filename string) ([][]int, []string) {
 	n := 0
@@ -126,47 +154,98 @@ func LoadTable(filename string) ([][]int, []string) {
 	return result, col_names
 }
 
+// GetPrefixTree returns the prefix tree
+
 func (server *Server) GetPrefixTree() *trees.PrefixTree {
 	return server.prefixTree
 }
+
+// GetPrefixTreeRootHash returns the hash of the prefix tree root
 
 func (server *Server) GetPrefixTreeRootHash() []byte {
 	return server.prefixTree.GetHash()
 }
 
+// GetStorageCost returns the byte size of the prefix tree
+
 func (server *Server) GetStorageCost() int {
-	// non-trivial fields: prefix tree, prefixes, commitment tree roots
 	totalSize := server.prefixTree.GetSize()
-	// for _, prefix := range server.prefixes {
-	// 	totalSize += len(prefix)
-	// }
-	// for _, commitment := range server.commitmentTrees {
-	// 	totalSize += len(commitment)
-	// }
-	fmt.Println("tree node count", server.prefixTree.GetNodeCount())
 	return totalSize
 }
 
-func (server *Server) AddToGivenSqlTable(table [][]int, names []string, tableName string, db *sql.DB) {
-	for i := 0; i < len(table[0]); i++ {
-		query := "insert into " + tableName + " values ("
-		for j := 0; j < len(table)-1; j++ {
-			query = query + strconv.Itoa(table[j][i]) + ", "
-		}
-		query = query + strconv.Itoa(table[len(table)-1][i]) + ");"
+// AddToGivenSqlTable inserts a set of values into the SQL database
 
-		add_vals, err := db.Query(query)
-		if err != nil {
-			panic(err.Error())
-		}
-		add_vals.Close()
+func (server *Server) AddToGivenSqlTable(values [][]int, columnnNames []string, tableName string, db *sql.DB) {
+	var wg sync.WaitGroup
+	// we divide the entries into threads, and then each thread into batches
+	// the batch is set to the square root of the the number of entries per thread, with a maximum of 100 entries per batch
+	numEntriesPerThread := int(math.Ceil(float64(len(values[0])) / float64(MAX_THREADS)))
+	numEntriesPerBatch := int(math.Ceil(math.Sqrt(float64(numEntriesPerThread))))
+	if numEntriesPerBatch > MAX_ENTRIES_PER_INSERT {
+		numEntriesPerBatch = int(math.Ceil(float64(numEntriesPerThread) / float64(MAX_ENTRIES_PER_INSERT)))
 	}
+	numBatchesPerThread := int(math.Ceil(float64(numEntriesPerThread) / float64(numEntriesPerBatch)))
+	totalAdded := make([]int, MAX_THREADS)
+	for i := range totalAdded {
+		totalAdded[i] = 0
+	}
+	for z := 0; z < MAX_THREADS; z++ {
+		wg.Add(1)
+		go func(k int) {
+			defer wg.Done()
+			for c := 0; c < numBatchesPerThread; c++ {
+				// k is the index of the thread, c is the entry of the batch
+				mmin := k*numEntriesPerThread + c*numEntriesPerBatch
+				mmax := k*numEntriesPerThread + (c+1)*numEntriesPerBatch
+				if mmax > (k+1)*numEntriesPerThread {
+					mmax = (k + 1) * numEntriesPerThread
+				}
+				if mmax > len(values[0]) {
+					mmax = len(values[0])
+				}
+				if mmax-mmin > 0 {
+					query := "insert into " + tableName + " values "
+					for i := mmin; i < mmax; i++ {
+						query += "("
+						for j := 0; j < len(values); j++ {
+							query += strconv.Itoa(values[j][i])
+							if j < len(values)-1 {
+								query += ","
+							}
+						}
+						if i < mmax-1 {
+							query += "),"
+						} else {
+							query += ");"
+						}
+						totalAdded[k]++
+					}
+
+					add_vals, err := db.Query(query)
+					if err != nil {
+						panic(err.Error())
+					}
+					add_vals.Close()
+				}
+			}
+		}(z)
+	}
+	wg.Wait()
 }
 
-func (server *Server) CreateAndWriteSqlTable(table [][]int, names []string, tableName string) {
-	// assumes user with name "root", no password, database named 'integridb'
-	db, err := sql.Open("mysql", "root@tcp(127.0.0.1:3306)/integridb")
+// GetOpenedDatabase returns an open connection to the MySQL database
+// It assumes that the database can be accessed by a user with name "root" and no password, and that there is a database named 'tap'
+
+func (server *Server) GetOpenedDatabase() (db *sql.DB) {
+	db, err := sql.Open("mysql", "root@tcp(127.0.0.1:3306)/tap")
 	util.Check(err)
+	return db
+}
+
+// CreateAndWriteSqlTable creates a MySQL table and insers the given values and column names
+
+func (server *Server) CreateAndWriteSqlTable(values [][]int, columnNames []string, tableName string) {
+	db := server.GetOpenedDatabase()
 	defer db.Close()
 
 	drop, err := db.Query("DROP TABLE IF EXISTS " + tableName + ";")
@@ -176,10 +255,10 @@ func (server *Server) CreateAndWriteSqlTable(table [][]int, names []string, tabl
 	defer drop.Close()
 
 	query := "CREATE TABLE " + tableName + " ("
-	for i := 0; i < len(names)-1; i++ {
-		query = query + names[i] + " int, "
+	for i := 0; i < len(columnNames)-1; i++ {
+		query = query + columnNames[i] + " int, "
 	}
-	query = query + names[len(names)-1] + " int);"
+	query = query + columnNames[len(columnNames)-1] + " int);"
 
 	create, err := db.Query(query)
 	if err != nil {
@@ -187,14 +266,13 @@ func (server *Server) CreateAndWriteSqlTable(table [][]int, names []string, tabl
 	}
 	defer create.Close()
 
-	server.AddToGivenSqlTable(table, names, tableName, db)
+	server.AddToGivenSqlTable(values, columnNames, tableName, db)
 }
 
 func (server *Server) AddToSqlTable(filename string, tableName string) []string {
 	table, columnNames := LoadTable(filename)
 
-	db, err := sql.Open("mysql", "root@tcp(127.0.0.1:3306)/integridb")
-	util.Check(err)
+	db := server.GetOpenedDatabase()
 	defer db.Close()
 
 	server.AddToGivenSqlTable(table, columnNames, tableName, db)
@@ -228,7 +306,9 @@ func (server *Server) addAllUniques(columnName string, tableName string, db *sql
 	return newUniques
 }
 
-func sortValArray(valArray [][]int, k int) { // sort by the i'th value in the array
+// sortValArray sorts a 2-dimensional slice by the i'th value in the slice
+
+func sortValArray(valArray [][]int, k int) {
 	// from https://stackoverflow.com/questions/55360091/golang-sort-slices-of-slice-by-first-element
 	sort.Slice(valArray, func(i, j int) bool {
 		// edge cases
@@ -244,13 +324,15 @@ func sortValArray(valArray [][]int, k int) { // sort by the i'th value in the ar
 	})
 }
 
-func (server *Server) getVals(timeVal uint32, miscVals []uint32, db *sql.DB) ([][]int, [][]int, []int, []int) {
+// getVals performs a MySQL database query to obtain the value corresponding to the given time and type values
+
+func (server *Server) getVals(timeVal uint32, typeVals []uint32, db *sql.DB) ([][]int, [][]int, []int, []int) {
 	valArray := make([][]int, 0)
 
 	valsQuery := "SELECT " + server.columnNames[server.userRowIdx] + ", " + server.columnNames[server.timeRowIdx] + ", " + server.columnNames[server.dataRowIdx] + ", " + server.columnNames[server.seedRowIdx] + " FROM " + server.tableName + " WHERE " + server.columnNames[server.timeRowIdx] + " = " + strconv.Itoa(int(timeVal))
-	numMiscFields := len(server.miscFieldsIdxs)
-	for i := 0; i < numMiscFields; i++ {
-		valsQuery += " AND " + server.columnNames[server.miscFieldsIdxs[i]] + " = " + strconv.Itoa(int(miscVals[i]))
+	numTypeFields := len(server.typeFieldsIdxs)
+	for i := 0; i < numTypeFields; i++ {
+		valsQuery += " AND " + server.columnNames[server.typeFieldsIdxs[i]] + " = " + strconv.Itoa(int(typeVals[i]))
 	}
 	valsQuery += ";"
 
@@ -286,94 +368,123 @@ func (server *Server) getVals(timeVal uint32, miscVals []uint32, db *sql.DB) ([]
 	return valMoments, seedMoments, users, times
 }
 
-func (server *Server) addDataPointsToPrefixTree(prefix []byte, uniqueMiscVals [][]uint32, uniqueTimeVals []uint32, timeVal uint32, miscVals []uint32, db *sql.DB) {
+func (server *Server) determinePrefixes(prefix []byte, uniqueTypeVals [][]uint32, uniqueTimeVals []uint32, timeVal uint32, typeVals []uint32, result *[]SumTreeData) {
 	// the first part of the prefix is the times
 	nUniqueTimes := len(uniqueTimeVals)
 	if nUniqueTimes > 0 {
 		for i := 0; i < nUniqueTimes; i++ {
 			timeBytes := make([]byte, 4)
 			binary.BigEndian.PutUint32(timeBytes, uint32(uniqueTimeVals[i]))
-			server.addDataPointsToPrefixTree(timeBytes, uniqueMiscVals, make([]uint32, 0), uniqueTimeVals[i], miscVals, db)
+			server.determinePrefixes(timeBytes, uniqueTypeVals, make([]uint32, 0), uniqueTimeVals[i], typeVals, result)
 		}
 		return
 	}
 
-	// then the misc columns
-	nUniqueCols := len(uniqueMiscVals)
+	// then the type columns
+	nUniqueCols := len(uniqueTypeVals)
 	if nUniqueCols > 0 {
-		// we process the misc columns in the order of the slice
-		nUniquesInCol := len(uniqueMiscVals[0])
+		// we process the type columns in the order of the slice
+		nUniquesInCol := len(uniqueTypeVals[0])
 		if nUniquesInCol == 0 {
 			fmt.Println("error: empty column!")
 		}
 		for i := 0; i < nUniquesInCol; i++ {
 			colBytes := make([]byte, 4)
-			binary.BigEndian.PutUint32(colBytes, uint32(uniqueMiscVals[0][i]))
+			binary.BigEndian.PutUint32(colBytes, uint32(uniqueTypeVals[0][i]))
 			newPrefix := append(prefix, colBytes...)
-			truncatedMiscVals := uniqueMiscVals[1:]
-			newMiscVals := append(miscVals, uniqueMiscVals[0][i])
-			server.addDataPointsToPrefixTree(newPrefix, truncatedMiscVals, make([]uint32, 0), timeVal, newMiscVals, db)
+			truncatedTypeVals := uniqueTypeVals[1:]
+			newTypeVals := append(typeVals, uniqueTypeVals[0][i])
+			server.determinePrefixes(newPrefix, truncatedTypeVals, make([]uint32, 0), timeVal, newTypeVals, result)
 		}
 		return
 	}
 
-	sqlStart := time.Now().UnixNano()
-	// finally, create a commitment tree for the values with this unique time/misc vals combo
-	// first get the values and seeds
-	vals, seeds, users, times := server.getVals(timeVal, miscVals, db)
-	server.sqlDuration += time.Now().UnixNano() - sqlStart
-
-	cmtStart := time.Now().UnixNano()
-	// then build the commitment tree
-	commitmentTree := trees.BuildMerkleCommitmentTree(vals, seeds, users, times)
-	server.buildCommitmentDuration += time.Now().UnixNano() - cmtStart
-
-	var rootHash [32]byte
-	if commitmentTree != nil {
-		rootHash = commitmentTree.GetRootHash()
-		bitPrefix := util.ConvertBytesToBits(prefix)
-		server.prefixTree.PrefixAppend(bitPrefix, rootHash[:])
-		server.prefixes = append(server.prefixes, prefix)
-		server.commitmentTrees = append(server.commitmentTrees, rootHash[:])
-	}
+	*result = append(*result, SumTreeData{prefix: prefix, timeVal: timeVal, typeVals: typeVals})
 }
 
 func (server *Server) AddToTree(columnNames []string, tableName string, valRange [][]uint32) {
-
 	sqlStart := time.Now().UnixNano()
 
-	db, err := sql.Open("mysql", "root@tcp(127.0.0.1:3306)/integridb")
-	util.Check(err)
+	db := server.GetOpenedDatabase()
 	defer db.Close()
 
 	// take out sql parts
-	uniqueMiscs := make([][]uint32, 0)
-	for i := 0; i < len(server.miscFieldsIdxs); i++ {
-		j := server.miscFieldsIdxs[i]
-		uniqueMiscs = append(uniqueMiscs, server.addAllUniques(columnNames[j], tableName, db, valRange[i+1]))
+	uniqueTypes := make([][]uint32, 0)
+	for i := 0; i < len(server.typeFieldsIdxs); i++ {
+		j := server.typeFieldsIdxs[i]
+		uniqueTypes = append(uniqueTypes, server.addAllUniques(columnNames[j], tableName, db, valRange[i+1]))
 	}
 
 	uniqueTimes := server.addAllUniques(columnNames[server.timeRowIdx], tableName, db, valRange[0])
 
 	server.sqlDuration += time.Now().UnixNano() - sqlStart
 
-	// fmt.Println()
-	// fmt.Print("unique miscs: ")
-	// fmt.Println(uniqueMiscs)
-	// fmt.Print("unique times: ")
-	// fmt.Println(uniqueTimes)
-
 	isNotEmpty := len(uniqueTimes) > 0
-	for _, uniques := range uniqueMiscs {
+	for _, uniques := range uniqueTypes {
 		isNotEmpty = isNotEmpty && len(uniques) > 0
 	}
 
+	sumTreeData := make([]SumTreeData, 0)
+	server.determinePrefixes(make([]byte, 0), uniqueTypes, uniqueTimes, 0, make([]uint32, 0), &sumTreeData)
+
+	l := int(math.Ceil(float64(len(sumTreeData)) / float64(MAX_THREADS)))
+	n := int(math.Ceil(float64(len(sumTreeData)) / float64(l)))
+
+	newPrefixes := make([][]byte, 0)
+	newTrees := make([][]byte, 0)
+	mu := &sync.Mutex{}
+	wg := &sync.WaitGroup{}
+
 	if isNotEmpty {
-		server.addDataPointsToPrefixTree(make([]byte, 0), uniqueMiscs, uniqueTimes, 0, make([]uint32, 0), db)
+		for i := 0; i < n; i++ {
+			wg.Add(1)
+			go func(k int) {
+				defer wg.Done()
+				mmin := k * l
+				mmax := (k + 1) * l
+				if mmax > len(sumTreeData) {
+					mmax = len(sumTreeData)
+				}
+				if mmax-mmin > 0 {
+					for j := mmin; j < mmax; j++ {
+						treeData := sumTreeData[j]
+						sqlStart := time.Now().UnixNano()
+						// finally, create a commitment tree for the values with this unique time/type vals combo
+						// first get the values and seeds
+						vals, seeds, users, times := server.getVals(treeData.timeVal, treeData.typeVals, db)
+						server.sqlDuration += time.Now().UnixNano() - sqlStart
+
+						cmtStart := time.Now().UnixNano()
+						// then build the commitment tree
+
+						commitmentTree := trees.BuildMerkleCommitmentTree(vals, seeds, users, times)
+						server.buildCommitmentDuration += time.Now().UnixNano() - cmtStart
+
+						var rootHash [32]byte
+						if commitmentTree != nil {
+							rootHash = commitmentTree.GetRootHash()
+							mu.Lock()
+							server.prefixes = append(server.prefixes, treeData.prefix)
+							server.commitmentTrees = append(server.commitmentTrees, rootHash[:])
+							newPrefixes = append(newPrefixes, treeData.prefix)
+							newTrees = append(newTrees, rootHash[:])
+							mu.Unlock()
+						}
+					}
+				}
+			}(i)
+		}
+	}
+
+	wg.Wait()
+
+	for i := range newPrefixes {
+		bitPrefix := util.ConvertBytesToBits(newPrefixes[i])
+		server.prefixTree.PrefixAppend(bitPrefix, newTrees[i])
 	}
 }
 
-func (server *Server) InitializeTree(columnNames []string, tableName string, userRowIdx, timeRowIdx, dataRowIdx, seedRowIdx uint32, miscFieldsIdxs []uint32) {
+func (server *Server) InitializeTree(columnNames []string, tableName string, userRowIdx, timeRowIdx, dataRowIdx, seedRowIdx uint32, typeFieldsIdxs []uint32) {
 	server.prefixTree = trees.NewPrefixTree()
 	server.prefixes = make([][]byte, 0)
 	server.commitmentTrees = make([][]byte, 0)
@@ -384,9 +495,9 @@ func (server *Server) InitializeTree(columnNames []string, tableName string, use
 	server.timeRowIdx = timeRowIdx
 	server.dataRowIdx = dataRowIdx
 	server.seedRowIdx = seedRowIdx
-	server.miscFieldsIdxs = miscFieldsIdxs
+	server.typeFieldsIdxs = typeFieldsIdxs
 
-	allVals := make([][]uint32, 1+len(miscFieldsIdxs))
+	allVals := make([][]uint32, 1+len(typeFieldsIdxs))
 	for i := range allVals {
 		allVals[i] = []uint32{0, math.MaxInt32}
 	}
@@ -405,12 +516,6 @@ func (server *Server) RequestPrefixMembershipProof(prefix []byte) []byte {
 	return outputBytes
 }
 
-// func (server *Server) RequestPrefixNonMembershipProof(vals []uint32) (proof *trees.NonMembershipProof) {
-// 	prefix := server.valsToPrefix(vals)
-// 	bitPrefix := util.ConvertBytesToBits(prefix)
-// 	return server.prefixTree.GenerateNonMembershipProof(bitPrefix)
-// }
-
 func (server *Server) RequestCommitmentTreeMembershipProof(inputBytes []byte) []byte {
 	server.queryReceiveRequestTime = time.Now().UnixNano()
 	var input *CommitmentMembershipProofInput
@@ -419,8 +524,7 @@ func (server *Server) RequestCommitmentTreeMembershipProof(inputBytes []byte) []
 
 	// sql part for lookUp
 	sqlStart := time.Now().UnixNano()
-	db, err := sql.Open("mysql", "root@tcp(127.0.0.1:3306)/integridb")
-	util.Check(err)
+	db := server.GetOpenedDatabase()
 	defer db.Close()
 
 	colvals := util.PrefixToVals(prefix)
@@ -440,27 +544,8 @@ func (server *Server) RequestCommitmentTreeMembershipProof(inputBytes []byte) []
 	return outputBytes
 }
 
-// func (server *Server) RequestCommitmentTreeMembershipProof(inputBytes []byte) []byte {
-// 	var input *CommitmentMembershipProofInput
-// 	json.Unmarshal(inputBytes, &input)
-// 	prefix, val, uid := input.Parse()
-// 	db, err := sql.Open("mysql", "root@tcp(127.0.0.1:3306)/integridb")
-// 	util.Check(err)
-// 	defer db.Close()
-
-// 	colvals := util.PrefixToVals(prefix)
-// 	vals, seeds, users, times := server.getVals(colvals[0], colvals[1:], db)
-
-// 	commitmentTree := trees.BuildMerkleCommitmentTree(vals, seeds, users, times)
-// 	output := commitmentTree.GenerateMembershipProof(int(val), int(uid))
-// 	outputBytes, err := json.Marshal(output)
-// 	util.Check(err)
-// 	return outputBytes
-// }
-
 func (server *Server) RequestCommitmentsAndProofs(prefix []byte) []byte {
-	db, err := sql.Open("mysql", "root@tcp(127.0.0.1:3306)/integridb")
-	util.Check(err)
+	db := server.GetOpenedDatabase()
 	defer db.Close()
 
 	colvals := util.PrefixToVals(prefix)
@@ -560,46 +645,59 @@ func (server *Server) RequestPrefixes(valBytes []byte) []byte {
 
 func (server *Server) RequestSumAndCounts(queryPrefixes [][]byte) (int, int, [][][]byte, []int, [][]byte) {
 	server.queryReceiveRequestTime = time.Now().UnixNano()
-	db, err := sql.Open("mysql", "root@tcp(127.0.0.1:3306)/integridb")
-	util.Check(err)
+	db := server.GetOpenedDatabase()
 	defer db.Close()
+
+	n := len(queryPrefixes)
 
 	totValSum := 0
 	totSeedSum := 0
-	commitments := make([][][]byte, 0)
-	counts := make([]int, 0)
-	hashes := make([][]byte, 0)
+	commitments := make([][][]byte, n)
+	counts := make([]int, n)
+	hashes := make([][]byte, n)
 
 	// iterate over the prefixes and determine the hash without the commitments in each commitment tree root
-	n := len(queryPrefixes)
-	// fmt.Println("---")
+	var wg sync.WaitGroup
+	mu := sync.Mutex{}
+	startTime := time.Now().UnixNano()
 	for i := 0; i < n; i++ {
+		wg.Add(1)
 		hash := make([]byte, 0)
 		prefix := queryPrefixes[i]
 		colvals := util.PrefixToVals(prefix)
 		vals, seeds, users, times := server.getVals(colvals[0], colvals[1:], db)
-		commitmentTree := trees.BuildMerkleCommitmentTree(vals, seeds, users, times)
-		if commitmentTree != nil {
-			hash = commitmentTree.GetRootChildHash()
-			commitments = append(commitments, commitmentTree.GetRootCommitments())
-		} else {
-			commitments = append(commitments, nil)
-		}
+		go func(k int) {
+			defer wg.Done()
+			commitmentTree := trees.BuildMerkleCommitmentTree(vals, seeds, users, times)
+			if commitmentTree != nil {
+				hash = commitmentTree.GetRootChildHash()
+				commitments[k] = commitmentTree.GetRootCommitments()
+			} else {
+				commitments[k] = nil
+			}
 
-		valSum := 0
-		seedSum := 0
+			valSum := 0
+			seedSum := 0
 
-		m := len(vals)
-		for j := 0; j < m; j++ {
-			valSum += vals[j][0]
-			seedSum += seeds[j][0]
-		}
+			m := len(vals)
+			for j := 0; j < m; j++ {
+				valSum += vals[j][0]
+				seedSum += seeds[j][0]
+			}
 
-		totValSum += valSum
-		totSeedSum += seedSum
-		counts = append(counts, m)
-		hashes = append(hashes, hash)
+			mu.Lock()
+			totValSum += valSum
+			totSeedSum += seedSum
+			mu.Unlock()
+
+			counts[k] = m
+			hashes[k] = hash
+
+		}(i)
 	}
+
+	wg.Wait()
+	server.buildTreeTime = time.Now().UnixNano() - startTime
 
 	server.querySendResponseTime = time.Now().UnixNano()
 	return totValSum, totSeedSum, commitments, counts, hashes
@@ -607,8 +705,7 @@ func (server *Server) RequestSumAndCounts(queryPrefixes [][]byte) (int, int, [][
 
 func (server *Server) RequestMinAndProofs(queryPrefixInputBytes []byte) (int, int, []byte, [][]byte, [][]byte) {
 	server.queryReceiveRequestTime = time.Now().UnixNano()
-	db, err := sql.Open("mysql", "root@tcp(127.0.0.1:3306)/integridb")
-	util.Check(err)
+	db := server.GetOpenedDatabase()
 	defer db.Close()
 
 	var queryPrefixInput *PrefixSet
@@ -639,28 +736,48 @@ func (server *Server) RequestMinAndProofs(queryPrefixInputBytes []byte) (int, in
 		}
 	}
 
+	fmt.Print("min: ")
+	fmt.Println(minVal)
+
 	params, err := bulletproofs.SetupGeneric(int64(minVal), BP_MAX)
 	util.Check(err)
 	var proofMin bulletproofs.ProofBPRP
+	var wg sync.WaitGroup
+	mu := sync.Mutex{}
+	server.buildTreeTime = 0
+	server.buildProofsTime = 0
 
-	fmt.Print("building proofs: ")
+	fmt.Println("building proofs...")
 	for i := 0; i < n; i++ {
-		fmt.Print(strconv.Itoa(i) + "/" + strconv.Itoa(n) + ", ")
-		commitmentTree := trees.BuildMerkleCommitmentTree(vals[i], seeds[i], users[i], times[i])
-		inclusionProof := commitmentTree.GenerateMembershipProof(localMins[i], -1, true)
-		inclusionProofs[i] = inclusionProof
-		proof, err := bulletproofs.ProveGeneric(big.NewInt(int64(vals[i][0][0])), params, big.NewInt(int64(seeds[i][0][0])))
-		util.Check(err)
-		rangeProofs[i] = &proof
+		wg.Add(1)
+		go func(k int) {
+			defer wg.Done()
+			startBuild := time.Now().UnixNano()
+			commitmentTree := trees.BuildMerkleCommitmentTree(vals[k], seeds[k], users[k], times[k])
+			buildTime := time.Now().UnixNano() - startBuild
+			mu.Lock()
+			server.buildTreeTime += buildTime
+			mu.Unlock()
+			startBuild = time.Now().UnixNano()
+			inclusionProof := commitmentTree.GenerateMembershipProof(localMins[k], -1, true)
+			inclusionProofs[k] = inclusionProof
+			proof, err := bulletproofs.ProveGeneric(big.NewInt(int64(vals[k][0][0])), params, big.NewInt(int64(seeds[k][0][0])))
+			util.Check(err)
+			buildTime = time.Now().UnixNano() - startBuild
+			mu.Lock()
+			server.buildProofsTime += buildTime
+			mu.Unlock()
+			rangeProofs[k] = &proof
 
-		if i == argminVal {
-			paramsMin, err := bulletproofs.SetupGeneric(int64(minVal), int64(minVal+1))
-			util.Check(err)
-			proofMin, err = bulletproofs.ProveGeneric(big.NewInt(int64(vals[i][0][0])), paramsMin, big.NewInt(int64(seeds[i][0][0])))
-			util.Check(err)
-		}
+			if k == argminVal {
+				paramsMin, err := bulletproofs.SetupGeneric(int64(minVal), int64(minVal+1))
+				util.Check(err)
+				proofMin, err = bulletproofs.ProveGeneric(big.NewInt(int64(vals[k][0][0])), paramsMin, big.NewInt(int64(seeds[k][0][0])))
+				util.Check(err)
+			}
+		}(i)
 	}
-	fmt.Println()
+	wg.Wait()
 
 	proofMinBytes, err := json.Marshal(proofMin)
 	util.Check(err)
@@ -681,8 +798,7 @@ func (server *Server) RequestMinAndProofs(queryPrefixInputBytes []byte) (int, in
 
 func (server *Server) RequestMaxAndProofs(queryPrefixes [][]byte) (int, int, []byte, [][]byte, [][]byte) {
 	server.queryReceiveRequestTime = time.Now().UnixNano()
-	db, err := sql.Open("mysql", "root@tcp(127.0.0.1:3306)/integridb")
-	util.Check(err)
+	db := server.GetOpenedDatabase()
 	defer db.Close()
 
 	n := len(queryPrefixes)
@@ -717,26 +833,42 @@ func (server *Server) RequestMaxAndProofs(queryPrefixes [][]byte) (int, int, []b
 	params, err := bulletproofs.SetupGeneric(0, int64(maxVal+1))
 	util.Check(err)
 	var proofMax bulletproofs.ProofBPRP
+	var wg sync.WaitGroup
+	mu := sync.Mutex{}
+	server.buildTreeTime = 0
+	server.buildProofsTime = 0
 
-	fmt.Print("building proofs: ")
+	fmt.Println("building proofs...")
 	for i := 0; i < n; i++ {
-		fmt.Print(strconv.Itoa(i) + "/" + strconv.Itoa(n) + ", ")
-		commitmentTree := trees.BuildMerkleCommitmentTree(vals[i], seeds[i], users[i], times[i])
-		inclusionProof := commitmentTree.GenerateMembershipProof(localMaxs[i], -1, false)
-		inclusionProofs[i] = inclusionProof
-		proof, err := bulletproofs.ProveGeneric(big.NewInt(int64(vals[i][len(vals[i])-1][0])), params, big.NewInt(int64(seeds[i][len(vals[i])-1][0])))
-		util.Check(err)
-		rangeProofs[i] = &proof
+		wg.Add(1)
+		go func(k int) {
+			startBuild := time.Now().UnixNano()
+			commitmentTree := trees.BuildMerkleCommitmentTree(vals[k], seeds[k], users[k], times[k])
+			buildTime := time.Now().UnixNano() - startBuild
+			mu.Lock()
+			server.buildTreeTime += buildTime
+			mu.Unlock()
 
-		if i == argmaxVal {
-			paramsMax, err := bulletproofs.SetupGeneric(int64(maxVal), int64(maxVal+1))
+			startBuild = time.Now().UnixNano()
+			inclusionProof := commitmentTree.GenerateMembershipProof(localMaxs[k], -1, false)
+			inclusionProofs[k] = inclusionProof
+			proof, err := bulletproofs.ProveGeneric(big.NewInt(int64(vals[k][len(vals[k])-1][0])), params, big.NewInt(int64(seeds[k][len(vals[k])-1][0])))
 			util.Check(err)
-			// fmt.Println(strconv.Itoa(vals[i][len(vals[i])-1]) + "inside [" + strconv.Itoa(maxVal) + ", " + strconv.Itoa(maxVal+1) + ")?")
-			proofMax, err = bulletproofs.ProveGeneric(big.NewInt(int64(vals[i][len(vals[i])-1][0])), paramsMax, big.NewInt(int64(seeds[i][len(vals[i])-1][0])))
-			util.Check(err)
-		}
+			buildTime = time.Now().UnixNano() - startBuild
+			mu.Lock()
+			server.buildProofsTime += buildTime
+			mu.Unlock()
+			rangeProofs[k] = &proof
+
+			if k == argmaxVal {
+				paramsMax, err := bulletproofs.SetupGeneric(int64(maxVal), int64(maxVal+1))
+				util.Check(err)
+				proofMax, err = bulletproofs.ProveGeneric(big.NewInt(int64(vals[k][len(vals[k])-1][0])), paramsMax, big.NewInt(int64(seeds[k][len(vals[k])-1][0])))
+				util.Check(err)
+			}
+		}(i)
 	}
-	fmt.Println()
+	wg.Wait()
 
 	proofMaxBytes, err := json.Marshal(proofMax)
 	util.Check(err)
@@ -757,8 +889,7 @@ func (server *Server) RequestMaxAndProofs(queryPrefixes [][]byte) (int, int, []b
 
 func (server *Server) RequestQuantileAndProofs(queryPrefixes [][]byte, k int, q int) (int, int, [][]byte, [][]byte, [][]byte, [][]byte) {
 	server.queryReceiveRequestTime = time.Now().UnixNano()
-	db, err := sql.Open("mysql", "root@tcp(127.0.0.1:3306)/integridb")
-	util.Check(err)
+	db := server.GetOpenedDatabase()
 	defer db.Close()
 
 	n := len(queryPrefixes)
@@ -800,6 +931,8 @@ func (server *Server) RequestQuantileAndProofs(queryPrefixes [][]byte, k int, q 
 	}
 	// round down, as we can only do range proofs on integers:
 	quantile := int(math.Floor(quantileFloat))
+	fmt.Print("quantile: ")
+	fmt.Println(quantile)
 	// determine how many duplicates there are of the quantile:
 	nCount := 0
 	for i := int(ff); i >= 0; i-- { // no need to search the full array - can start from ff and cc and search down/up
@@ -827,48 +960,72 @@ func (server *Server) RequestQuantileAndProofs(queryPrefixes [][]byte, k int, q 
 	paramsQuantileRight, err := bulletproofs.SetupGeneric(int64(quantile), BP_MAX)
 	util.Check(err)
 
-	fmt.Println("total # nodes: " + strconv.Itoa(mm))
-	fmt.Print("building proofs: ")
+	var wg sync.WaitGroup
+	mu := sync.Mutex{}
+	server.buildTreeTime = 0
+	server.buildProofsTime = 0
+
+	fmt.Println("total # leaves: " + strconv.Itoa(mm))
+	fmt.Println("building proofs...")
 	for i := 0; i < n; i++ {
-		fmt.Print(strconv.Itoa(i) + "/" + strconv.Itoa(n) + ", ")
-		m := len(vals[i])
-		highestVal := -1
-		highestValIdx := -1
-		lowestVal := -1
-		lowestValIdx := -1
-		// find as many nodes as possible whose value is at most equal to the quantile
-		for j := 0; j < m; j++ {
-			if vals[i][j][0] <= quantile {
-				highestVal = vals[i][j][0]
-				highestValIdx = j
+		wg.Add(1)
+		go func(k int) {
+			defer wg.Done()
+			m := len(vals[k])
+			highestVal := -1
+			highestValIdx := -1
+			lowestVal := -1
+			lowestValIdx := -1
+			// find as many leaves as possible whose value is at most equal to the quantile
+			for j := 0; j < m; j++ {
+				if vals[k][j][0] <= quantile {
+					highestVal = vals[k][j][0]
+					highestValIdx = j
+				}
 			}
-		}
-		// find as many nodes as possible whose value is at least equal to the quantile
-		for j := m - 1; j >= 0; j-- {
-			if vals[i][j][0] >= quantile {
-				lowestVal = vals[i][j][0]
-				lowestValIdx = j
+			// find as many leaves as possible whose value is at least equal to the quantile
+			for j := m - 1; j >= 0; j-- {
+				if vals[k][j][0] >= quantile {
+					lowestVal = vals[k][j][0]
+					lowestValIdx = j
+				}
 			}
-		}
-		// build the Merkle tree
-		commitmentTree := trees.BuildMerkleCommitmentTree(vals[i], seeds[i], users[i], times[i])
-		// create the proofs
-		if highestValIdx > -1 {
-			proof, err := bulletproofs.ProveGeneric(big.NewInt(int64(vals[i][highestValIdx][0])), paramsQuantileLeft, big.NewInt(int64(seeds[i][highestValIdx][0])))
-			util.Check(err)
-			rangeProofsLeft[i] = &proof
-			inclusionProof := commitmentTree.GenerateMembershipProof(highestVal, -1, false)
-			inclusionProofsLeft[i] = inclusionProof
-		}
-		if lowestValIdx > -1 {
-			proof, err := bulletproofs.ProveGeneric(big.NewInt(int64(vals[i][lowestValIdx][0])), paramsQuantileRight, big.NewInt(int64(seeds[i][lowestValIdx][0])))
-			util.Check(err)
-			rangeProofsRight[i] = &proof
-			inclusionProof := commitmentTree.GenerateMembershipProof(lowestVal, -1, true)
-			inclusionProofsRight[i] = inclusionProof
-		}
+			// build the Merkle tree
+			startBuild := time.Now().UnixNano()
+			commitmentTree := trees.BuildMerkleCommitmentTree(vals[k], seeds[k], users[k], times[k])
+			buildTime := time.Now().UnixNano() - startBuild
+			mu.Lock()
+			server.buildTreeTime += buildTime
+			mu.Unlock()
+
+			// create the proofs
+			if highestValIdx > -1 {
+				startBuild = time.Now().UnixNano()
+				proof, err := bulletproofs.ProveGeneric(big.NewInt(int64(vals[k][highestValIdx][0])), paramsQuantileLeft, big.NewInt(int64(seeds[k][highestValIdx][0])))
+				util.Check(err)
+				rangeProofsLeft[k] = &proof
+				inclusionProof := commitmentTree.GenerateMembershipProof(highestVal, -1, false)
+				inclusionProofsLeft[k] = inclusionProof
+				buildTime = time.Now().UnixNano() - startBuild
+				mu.Lock()
+				server.buildProofsTime += buildTime
+				mu.Unlock()
+			}
+			if lowestValIdx > -1 {
+				startBuild = time.Now().UnixNano()
+				proof, err := bulletproofs.ProveGeneric(big.NewInt(int64(vals[k][lowestValIdx][0])), paramsQuantileRight, big.NewInt(int64(seeds[k][lowestValIdx][0])))
+				util.Check(err)
+				rangeProofsRight[k] = &proof
+				inclusionProof := commitmentTree.GenerateMembershipProof(lowestVal, -1, true)
+				inclusionProofsRight[k] = inclusionProof
+				buildTime = time.Now().UnixNano() - startBuild
+				mu.Lock()
+				server.buildProofsTime += buildTime
+				mu.Unlock()
+			}
+		}(i)
 	}
-	fmt.Println()
+	wg.Wait()
 
 	inclusionProofsLeftBytes := make([][]byte, len(inclusionProofsLeft))
 	for i, proof := range inclusionProofsLeft {

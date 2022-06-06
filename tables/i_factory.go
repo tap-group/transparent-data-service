@@ -5,11 +5,9 @@ type ITableFactory interface {
 
 	CreateTableWithRandomMissing(filename string)
 
-	CreateTableWithRandomMissingForExperiment(filename string, nUsers, nDistricts, nTimeslots, startTime, missFreq, maxPower, mode int)
+	CreateTableForExperiment(filename string, nUsers, nDistricts, nTimeslots, startTime, missFreq, industryFeq, maxPower, mode, nonce int)
 
-	RegenerateTableWithRandomMissingForExperiment(filename string, nTimeslots, startTime, missFreq, maxPower, mode int)
-
-	RegenerateTableWithoutRandomMissingForExperiment(filename string, nTimeslots, startTime, maxPower, mode int)
+	RegenerateTableForExperiment(filename string, nTimeslots, startTime, missFreq, maxPower, mode, nonce int)
 
 	CreateExample2Table(filename string)
 }

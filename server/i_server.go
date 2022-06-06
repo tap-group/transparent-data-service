@@ -7,6 +7,10 @@ type IServer interface {
 
 	GetStorageCost() int
 
+	GetBuildTreeTime() int64
+
+	GetBuildProofsTime() int64
+
 	AddToSqlTable(filename string, tableName string) []string
 
 	InitializeSqlTable(filename string, tableName string) []string
