@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/csv"
 	"flag"
 	"fmt"
@@ -19,14 +20,15 @@ import (
 	"github.com/tap-group/tdsvc/util"
 )
 
-const LOOKUP = 0
-const SUM = 1
-const AVG = 2
-const COUNT = 3
-const MIN = 4
-const MAX = 5
-const MEDIAN = 6
-const PERCENTILE_5 = 7
+const INSERT = 0
+const LOOKUP = 1
+const SUM = 2
+const AVG = 3
+const COUNT = 4
+const MIN = 5
+const MAX = 6
+const MEDIAN = 7
+const PERCENTILE_5 = 8
 
 var (
 	server  pkg_server.IServer
@@ -57,7 +59,7 @@ func runServerDataInsertionCostsPerEpoch(nEpochs int, nUsers int, nDistricts int
 	filename := "input/table1.txt"
 	tablename := "Table1"
 
-	factory.CreateTableWithRandomMissingForExperiment(filename, nUsers, nDistricts, 1, 0, 20, 2000, mode) // filename, nUsers, nDistricts, nTimeslots, start time, miss freq., max. power
+	factory.CreateTableForExperiment(filename, nUsers, nDistricts, 1, 0, 20, 5, 2000, mode, 0) // filename, nUsers, nDistricts, nTimeslots, start time, miss freq., max. power
 
 	start := time.Now().UnixNano()
 	columnNames := server.InitializeSqlTable(filename, tablename)
@@ -69,7 +71,7 @@ func runServerDataInsertionCostsPerEpoch(nEpochs int, nUsers int, nDistricts int
 	sumTime := int64(0)
 	sumN := 0
 	for n := 0; n < nEpochs; n++ {
-		factory.RegenerateTableWithoutRandomMissingForExperiment(filename, 1, n+1, 2000, mode)
+		factory.RegenerateTableForExperiment(filename, 1, n+1, 0, 2000, mode, 0)
 		// start = time.Now().UnixNano()
 		columnNames = server.AddToSqlTable(filename, tablename)
 		// end = time.Now().UnixNano()
@@ -101,65 +103,11 @@ func runServerDataInsertionCostsPerEpoch(nEpochs int, nUsers int, nDistricts int
 	writeCsvFile(outputfilename, []string{"epoch", "timecost", "storagecost"}, insertCosts)
 }
 
-// func runAuditCostsPerEpoch(nEpochs int, nUsers int, outputfilename string, mode int) {
-// 	filename := "input/table2.txt"
-// 	tablename := "Table2"
-
-// 	factory := new(table.TableFactory)
-// 	factory.CreateTableWithRandomMissingForExperiment(filename, nUsers, 10, 1, 0, 20, 2000, mode) // filename, nUsers, nDistricts, nTimeslots, start time, miss freq., max. power
-
-// 	server := new(server.Server)
-// 	columnNames := server.InitializeSqlTable(filename, tablename)
-// 	server.InitializeTree(columnNames, tablename, 0, 3, 4, 6, []uint32{1, 2})
-
-// 	auditor := new(auditor.Auditor)
-// 	auditor.SetServer(server)
-
-// 	auditCosts := make([][]string, 0)
-// 	fmt.Print("updating tree: ")
-// 	for n := 0; n < nEpochs; n++ {
-// 		fmt.Print(strconv.Itoa(n) + "/" + strconv.Itoa(nEpochs) + ", ")
-
-// 		valRange := [][]uint32{{uint32(n + 1), uint32(n + 2)}, {0, math.MaxInt32}, {0, math.MaxInt32}} // only check time slot n+1, and all other entries
-
-// 		factory.RegenerateTableWithoutRandomMissingForExperiment(filename, 1, n+1, 20, 2000, mode)
-// 		columnNames = server.AddToSqlTable(filename, tablename)
-// 		server.AddToTree(columnNames, tablename, valRange)
-
-// 		startPrefixCheck := time.Now().UnixNano()
-// 		prefixTreeCheck := auditor.CheckPrefixTree(3)
-// 		if !prefixTreeCheck {
-// 			fmt.Println("prefix tree check failed -- terminating experiment")
-// 			log.Fatal()
-// 		}
-// 		endPrefixCheck := time.Now().UnixNano()
-
-// 		startCommitmentTreeCheck := time.Now().UnixNano()
-// 		commitmentTreeCheck := auditor.CheckAllCommitTrees(valRange)
-// 		if !commitmentTreeCheck {
-// 			fmt.Println("commitment tree check failed -- terminating experiment")
-// 			log.Fatal()
-// 		}
-// 		endCommitmentTreeCheck := time.Now().UnixNano()
-
-// 		prefixTmeDiff := endPrefixCheck - startPrefixCheck
-// 		commitTimeDiff := endCommitmentTreeCheck - startCommitmentTreeCheck
-
-// 		auditCosts = append(auditCosts, []string{strconv.Itoa(n + 1), processTimeDiff(prefixTmeDiff), processTimeDiff(commitTimeDiff), processTimeDiff(prefixTmeDiff + commitTimeDiff), strconv.Itoa(auditor.GetStorageCost()), strconv.Itoa(auditor.GetBandwidthUse())})
-// 		auditor.ResetBandwidthUse()
-// 	}
-// 	fmt.Println()
-
-// 	fmt.Print("results: ")
-// 	fmt.Println(auditCosts)
-// 	writeCsvFile(outputfilename, []string{"epoch", "timecostprefix", "timecostcommitment", "timecosttotal", "storagecost", "bandwidthcost"}, auditCosts)
-// }
-
 func runClientQueryCostsPerEpoch(nEpochs int, nUsers int, nDistricts int, outputfilename string, mode int, query int) {
 	filename := "input/table3.txt"
 	tablename := "Table3"
 
-	factory.CreateTableWithRandomMissingForExperiment(filename, nUsers, nDistricts, 1, 0, 20, 200, mode) // filename, nUsers, nDistricts, nTimeslots, start time, miss freq., max. power
+	factory.CreateTableForExperiment(filename, nUsers, nDistricts, 1, 0, 20, 5, 200, mode, 0) // filename, nUsers, nDistricts, nTimeslots, start time, miss freq., max. power
 
 	columnNames := server.InitializeSqlTable(filename, tablename)
 	server.InitializeTree(columnNames, tablename, 0, 3, 4, 6, []uint32{1, 2})
@@ -174,7 +122,7 @@ func runClientQueryCostsPerEpoch(nEpochs int, nUsers int, nDistricts int, output
 	result := [][]string{}
 
 	for n := 0; n < nEpochs; n++ {
-		factory.RegenerateTableWithoutRandomMissingForExperiment(filename, 1, n+1, 200, mode)
+		factory.RegenerateTableForExperiment(filename, 1, n+1, 200, 0, mode, 0)
 		columnNames = server.AddToSqlTable(filename, tablename)
 		valRange := [][]uint32{{uint32(n + 1), uint32(n + 2)}, {0, math.MaxInt32}, {0, math.MaxInt32}} // only check time slot n+1, and all other entries
 		server.AddToTree(columnNames, tablename, valRange)
@@ -234,7 +182,7 @@ func runClientQueryCostsSingleEpoch(nEpochs int, nUsers int, nDistricts int, nRe
 	filename := "input/table4.txt"
 	tablename := "Table4"
 
-	factory.CreateTableWithRandomMissingForExperiment(filename, nUsers, nDistricts, nEpochs, 0, 20, 200, mode) // filename, nUsers, nDistricts, nTimeslots, start time, miss freq., max. power
+	factory.CreateTableForExperiment(filename, nUsers, nDistricts, nEpochs, 0, 20, 5, 200, mode, 0) // filename, nUsers, nDistricts, nTimeslots, start time, miss freq., max. power
 
 	columnNames := server.InitializeSqlTable(filename, tablename)
 	server.InitializeTree(columnNames, tablename, 0, 3, 4, 6, []uint32{1, 2})
@@ -310,7 +258,7 @@ func runTableEntry(nEpochs int, nUsers int, nDistricts int, nRepeats int, mode i
 	tablename := "Table4"
 
 	factory := new(tables.TableFactory)
-	factory.CreateTableWithRandomMissingForExperiment(filename, nUsers, nDistricts, nEpochs, 0, 20, 2000, mode) // filename, nUsers, nDistricts, nTimeslots, start time, miss freq., max. power
+	factory.CreateTableForExperiment(filename, nUsers, nDistricts, nEpochs, 0, 20, 5, 2000, mode, 0) // filename, nUsers, nDistricts, nTimeslots, start time, miss freq., max. power
 
 	columnNames := server.InitializeSqlTable(filename, tablename)
 	server.InitializeTree(columnNames, tablename, 0, 3, 4, 6, []uint32{1, 2})
@@ -333,7 +281,7 @@ func runTableEntry(nEpochs int, nUsers int, nDistricts int, nRepeats int, mode i
 	for i := 0; i < nRepeats; i++ {
 		// insert
 		insertValRange := [][]uint32{{uint32(nEpochs + i + 1), uint32(nEpochs + i + 2)}, {0, math.MaxInt32}, {0, math.MaxInt32}} // only check time slot i+1, and all other entries
-		factory.RegenerateTableWithoutRandomMissingForExperiment(filename, 1, nEpochs+i+1, 2000, mode)
+		factory.RegenerateTableForExperiment(filename, 1, nEpochs+i+1, 0, 2000, mode, 0)
 		columnNames = server.AddToSqlTable(filename, tablename)
 
 		server.ResetDurations()
@@ -388,6 +336,214 @@ func runTableEntry(nEpochs int, nUsers int, nDistricts int, nRepeats int, mode i
 		fmt.Sprintf("%.3f", float64(sums[5])/(float64(nRepeats)*float64(1000000000))),
 		fmt.Sprintf("%.3f", float64(sums[6])/(float64(nRepeats)*float64(1000000000))),
 	}
+}
+
+func getQueryRunTimes(client *client.Client, queryValRange [][]uint32, query int) (int64, int64) {
+	startTime := time.Now().UnixNano()
+	var err error
+	if query == 0 {
+		_, err = client.SumQuery(queryValRange)
+	} else if query == 1 {
+		_, err = client.MinQuery(queryValRange)
+	} else if query == 2 {
+		_, err = client.QuantileQuery(queryValRange, 1, 2)
+	}
+	util.Check(err)
+	totalTime := time.Now().UnixNano() - startTime
+	clientTime := client.GetProcessingTime()
+	return totalTime, clientTime
+}
+
+func getNSamplesForNumUsers(n, u int) int {
+	if n > 0 {
+		return n
+	}
+	if u < 1000 {
+		return 25
+	}
+	if u > 1000000 {
+		return 1
+	}
+	return 5
+}
+
+func runQueryScalabilityExperiment(nUsers []int, nDistricts []int, nSamples, mode int) {
+	inputFilename := "input/table6.txt"
+	outputFilename := "output/experiment6.csv"
+	tablename := "Table6"
+
+	file, err := os.OpenFile(outputFilename, os.O_APPEND|os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	util.Check(err)
+	datawriter := bufio.NewWriter(file)
+	_, _ = datawriter.WriteString("n_users, n_trees, file, sql, tree, lookup_total, lookup_client, sum_all_total, sum_all_client, min_all_total, min_all_client, quantile_all_total, quantile_all_client, sum_limited_total, sum_limited_client, min_limited_total, min_limited_client, quantile_limited_total, quantile_limited_client\n")
+
+	printExperimentRange(nUsers, nDistricts)
+
+	for _, u := range nUsers {
+		for _, d := range nDistricts {
+			timeResults := make([]int64, 17)
+			for i := range timeResults {
+				timeResults[i] = 0
+			}
+
+			n := getNSamplesForNumUsers(nSamples, u)
+
+			for j := 0; j < n; j++ {
+				fmt.Println(strconv.Itoa(u) + " users, " + strconv.Itoa(d) + " subtrees, sample " + strconv.Itoa(j+1) + ":")
+
+				// create the data file
+				startFile := time.Now().UnixNano()
+				factory.CreateTableForExperiment(inputFilename, u, d, 1, 0, 0, 0, 200, mode, j) // filename, nUsers, nDistricts, nTimeslots, start time, miss freq., max. power
+				endFile := time.Now().UnixNano()
+				timeResults[0] += endFile - startFile
+				fmt.Print("generating data file: ")
+				fmt.Print(float64(endFile-startFile) / 1000000000)
+				fmt.Println("s")
+				// sql table
+				columnNames := server.InitializeSqlTable(inputFilename, tablename)
+				endSql := time.Now().UnixNano()
+				timeResults[1] += endSql - endFile
+				fmt.Print("adding data to sql table: ")
+				fmt.Print(float64(endSql-endFile) / 1000000000)
+				fmt.Println("s")
+				// build the tree to determine the root
+				server.InitializeTree(columnNames, tablename, 0, 3, 4, 6, []uint32{1, 2})
+				endTree := time.Now().UnixNano()
+				timeResults[2] += endTree - endSql
+				fmt.Print("creating TAP data structure: ")
+				fmt.Print(float64(endTree-endSql) / 1000000000)
+				fmt.Println("s")
+
+				// client-server queries
+				client := new(client.Client)
+				client.SetServer(server)
+
+				var err error
+				// lookup query
+				entry := util.ReadCsvFileEntry(inputFilename, 1)
+				startLookup := time.Now().UnixNano()
+				_, err = client.LookupQuery(entry[0], entry[3], entry[4], entry[6], []uint32{entry[1], entry[2]})
+				util.Check(err)
+				endLookup := time.Now().UnixNano()
+				lookupTime := endLookup - startLookup
+				clientLookupTime := client.GetProcessingTime()
+				timeResults[3] += lookupTime
+				timeResults[4] += clientLookupTime
+
+				// query over full range
+				queryValRange := [][]uint32{{0, 1}, {0, math.MaxInt32}, {0, math.MaxInt32}}
+				totalSumTime, clientSumTime := getQueryRunTimes(client, queryValRange, 0)
+				timeResults[5] += totalSumTime
+				timeResults[6] += clientSumTime
+				totalMinTime, clientMinTime := getQueryRunTimes(client, queryValRange, 1)
+				timeResults[7] += totalMinTime
+				timeResults[8] += clientMinTime
+				totalQuantileTime, clientQuantileTime := getQueryRunTimes(client, queryValRange, 2)
+				timeResults[9] += totalQuantileTime
+				timeResults[10] += clientQuantileTime
+
+				// query over limited range (first 10 subtrees)
+				queryValRange = [][]uint32{{0, 1}, {0, 10}, {0, math.MaxInt32}}
+				totalSumLimitedTime, clientSumLimitedTime := getQueryRunTimes(client, queryValRange, 0)
+				timeResults[11] += totalSumLimitedTime
+				timeResults[12] += clientSumLimitedTime
+				totalMinLimitedTime, clientMinLimitedTime := getQueryRunTimes(client, queryValRange, 1)
+				timeResults[13] += totalMinLimitedTime
+				timeResults[14] += clientMinLimitedTime
+				totalQuantileLimitedTime, clientQuantileLimitedTime := getQueryRunTimes(client, queryValRange, 2)
+				timeResults[15] += totalQuantileLimitedTime
+				timeResults[16] += clientQuantileLimitedTime
+			}
+
+			resultString := strconv.Itoa(u) + "," + strconv.Itoa(d)
+			for i := range timeResults {
+				resultString += "," + fmt.Sprint(float64(timeResults[i]/int64(n))/1000000000)
+			}
+			_, _ = datawriter.WriteString(resultString + "\n")
+			datawriter.Flush()
+		}
+	}
+
+	file.Close()
+	fmt.Println()
+}
+
+func runAuditScalabilityExperiment(nUsers []int, nDistricts []int, nSamples, mode int) {
+	inputFilename := "input/table7.txt"
+	outputFilename := "output/experiment7.csv"
+	tablename := "Table7"
+
+	file, err := os.OpenFile(outputFilename, os.O_APPEND|os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	util.Check(err)
+	datawriter := bufio.NewWriter(file)
+	_, _ = datawriter.WriteString("n_users, n_trees, file, sql, tree, audit_prefix_tree, audit_sum_trees\n")
+
+	printExperimentRange(nUsers, nDistricts)
+
+	for _, u := range nUsers {
+		for _, d := range nDistricts {
+			timeResults := make([]int64, 5)
+			for i := range timeResults {
+				timeResults[i] = 0
+			}
+
+			n := getNSamplesForNumUsers(nSamples, u)
+
+			for j := 0; j < n; j++ {
+				fmt.Println(strconv.Itoa(u) + " users, " + strconv.Itoa(d) + " subtrees, sample " + strconv.Itoa(j+1) + ":")
+
+				// create the data file
+				startFile := time.Now().UnixNano()
+				factory.CreateTableForExperiment(inputFilename, u, d, 1, 0, 0, 0, 200, mode, j) // filename, nUsers, nDistricts, nTimeslots, start time, miss freq., max. power
+				endFile := time.Now().UnixNano()
+				timeResults[0] += endFile - startFile
+				fmt.Print("generating data file: ")
+				fmt.Print(float64(endFile-startFile) / 1000000000)
+				fmt.Println("s")
+				// sql table
+				columnNames := server.InitializeSqlTable(inputFilename, tablename)
+				endSql := time.Now().UnixNano()
+				timeResults[1] += endSql - endFile
+				fmt.Print("adding data to sql table: ")
+				fmt.Print(float64(endSql-endFile) / 1000000000)
+				fmt.Println("s")
+				// build the tree to determine the root
+				server.InitializeTree(columnNames, tablename, 0, 3, 4, 6, []uint32{1, 2})
+				endTree := time.Now().UnixNano()
+				timeResults[2] += endTree - endSql
+				fmt.Print("creating TAP data structure: ")
+				fmt.Print(float64(endTree-endSql) / 1000000000)
+				fmt.Println("s")
+
+				// client-server queries
+				auditor := new(auditor.Auditor)
+				auditor.SetServer(server)
+
+				// prefix tree structure audit
+				startPrefixTreeCheck := time.Now().UnixNano()
+				auditor.CheckPrefixTree(3) // time + two misc. val columns
+				endPrefixTreeCheck := time.Now().UnixNano()
+				timeResults[3] += endPrefixTreeCheck - startPrefixTreeCheck
+
+				// sum tree ordering audit
+				valRange := [][]uint32{{0, 1}, {0, math.MaxInt32}, {0, math.MaxInt32}}
+				startCommitmentTreesCheck := time.Now().UnixNano()
+				auditor.CheckAllCommitTrees(valRange)
+				endCommitmentTreesCheck := time.Now().UnixNano()
+				timeResults[4] += endCommitmentTreesCheck - startCommitmentTreesCheck
+			}
+
+			resultString := strconv.Itoa(u) + "," + strconv.Itoa(d)
+			for i := range timeResults {
+				resultString += "," + fmt.Sprint(float64(timeResults[i]/int64(n))/1000000000)
+			}
+			_, _ = datawriter.WriteString(resultString + "\n")
+			datawriter.Flush()
+		}
+	}
+
+	file.Close()
+	fmt.Println()
 }
 
 func runExperiment1a(nEpochs int, nUsers int, nDistricts int) {
@@ -500,13 +656,62 @@ func runExperiment5(nEpochs int, nUsers int, nDistricts int) {
 	writeCsvFile("output/experiment5.csv", []string{"storage", "insert", "lookup", "auditor", "sum", "min", "quantile"}, results)
 }
 
+func printExperimentRange(nUsers, nDistricts []int) {
+	fmt.Print("n. users: ")
+	for _, users := range nUsers {
+		fmt.Print(users)
+		fmt.Print(", ")
+	}
+	fmt.Println()
+	fmt.Print("n. districts: ")
+	for _, districts := range nDistricts {
+		fmt.Print(districts)
+		fmt.Print(", ")
+	}
+	fmt.Println()
+}
+
+func getExperimentRange(usersMin, usersMax, usersNum, districtsMin, districtsMax, districtsNum int) ([]int, []int) {
+	nUsers := make([]int, usersNum)
+	nDistricts := make([]int, districtsNum)
+	usersExp := math.Pow(float64(usersMax/usersMin), 1./float64(usersNum-1))
+	districtsExp := math.Pow(float64(districtsMax/districtsMin), 1./float64(districtsNum-1))
+	for i := 0; i < usersNum; i++ {
+		nUsers[i] = int(math.Floor(float64(usersMin) * math.Pow(usersExp, float64(i))))
+	}
+	for i := 0; i < districtsNum; i++ {
+		nDistricts[i] = int(math.Floor(float64(districtsMin) * math.Pow(districtsExp, float64(i))))
+	}
+	return nUsers, nDistricts
+}
+
+func runExperiment6(nEpochs int, nUsers, nDistricts []int, nSamples int) {
+	fmt.Printf("running experiment 6: scalability test of queries\n")
+	runQueryScalabilityExperiment(nUsers, nDistricts, nSamples, tables.RAND_ZERO_TO_ND)
+}
+
+func runExperiment7(nEpochs int, nUsers, nDistricts []int, nSamples int) {
+	fmt.Printf("running experiment 7: scalability test of audits\n")
+	runAuditScalabilityExperiment(nUsers, nDistricts, nSamples, tables.RAND_ZERO_TO_ND)
+}
+
 func main() {
 	nUsers := 100
-	nEpochs1 := 500
+	// n. users: 100, 267, 715, 1912, 5113, 13673, 36565, 97780, 261476, 699216, 1869781, 5000000,
+	// n. districts: 10, 21, 46, 100, 215, 464, 1000,
+	nUsers6, nDistricts6 := getExperimentRange(100, 5000000, 12, 10, 1000, 3)
+	// n. users: 100, 187, 351, 657, 1232, 2310, 4328, 8111, 15199, 28480, 53366, 100000,
+	// n. districts: 10, 100,
+	nUsers7, nDistricts7 := getExperimentRange(100, 100000, 12, 10, 100, 2) //
+	nEpochs1 := 100
 	nEpochs2 := 500
 	nEpochs3 := 100
 	nEpochs4 := 10
 	nEpochs5 := 1
+	nEpochs6 := 1
+	nEpochs7 := 1
+	nSamples6 := -1
+	nSamples7 := 3
 
 	remote := flag.Bool("remote", false, "run remote server")
 	serverURL := flag.String("url", "http://localhost:9045", "remote server url")
@@ -531,7 +736,12 @@ func main() {
 	performExperiment3hFlag := flag.Bool("experiment3h", false, "perform experiment 3h")
 	performExperiment4Flag := flag.Bool("experiment4", false, "perform experiment 4")
 	performExperiment5Flag := flag.Bool("experiment5", false, "perform experiment 5")
+	performExperiment6Flag := flag.Bool("experiment6", false, "perform experiment 6")
+	performExperiment7Flag := flag.Bool("experiment7", false, "perform experiment 7")
 	performExperimentsFlag := flag.Bool("experiments", false, "perform all experiments")
+	numUsersFlag := flag.Int("nu", -1, "number of users")
+	numDistrictsFlag := flag.Int("nd", -1, "number of districts/subtrees")
+	numSamplesFlag := flag.Int("ns", -1, "number of samples")
 	flag.Parse()
 
 	if *remote {
@@ -542,9 +752,24 @@ func main() {
 		factory = new(tables.TableFactory)
 	}
 
+	if *numUsersFlag > -1 {
+		nUsers = *numUsersFlag
+		nUsers6 = []int{*numUsersFlag}
+		nUsers7 = []int{*numUsersFlag}
+	}
+
+	if *numDistrictsFlag > -1 {
+		nDistricts6 = []int{*numDistrictsFlag}
+		nDistricts7 = []int{*numDistrictsFlag}
+	}
+
+	if *numSamplesFlag > -1 {
+		nSamples6 = *numSamplesFlag
+	}
+
 	if *createTablesFlag {
 		fmt.Printf("creating table\n")
-		factory.CreateTableWithoutRandomMissing("input/table1.txt")
+		factory.CreateTableWithRandomMissing("input/table1.txt")
 		factory.CreateExample2Table("input/table_example2.txt")
 		fmt.Printf("done\n")
 		return
@@ -641,6 +866,14 @@ func main() {
 		runExperiment5(nEpochs5, nUsers, int(math.Sqrt(float64(nUsers))))
 	}
 
+	if *performExperiment6Flag {
+		runExperiment6(nEpochs6, nUsers6, nDistricts6, nSamples6)
+	}
+
+	if *performExperiment7Flag {
+		runExperiment7(nEpochs7, nUsers7, nDistricts7, nSamples7)
+	}
+
 	if *performExperimentsFlag {
 		runExperiment1a(nEpochs1, nUsers, 1)
 		runExperiment1b(nEpochs1, nUsers, int(math.Sqrt(float64(nUsers))))
@@ -660,29 +893,4 @@ func main() {
 		runExperiment4(nEpochs4, nUsers, int(math.Sqrt(float64(nUsers))))
 		runExperiment5(nEpochs5, nUsers, int(math.Sqrt(float64(nUsers))))
 	}
-
-	// measureStorageCost(1)
-	// measureStorageCost(10)
-	// measureStorageCost(100)
 }
-
-// func measureStorageCost(nEpochs int) {
-// 	filename := fmt.Sprintf("input/table_%d.txt", nEpochs)
-
-// 	fmt.Println("creating table")
-// 	factory := new(tables.TableFactory)
-// 	factory.CreateTableWithRandomMissingForExperiment(
-// 		filename, 100, 10, nEpochs, 0, 0, 2000, tables.UNIF_ZERO_TO_ND)
-
-// 	tablename := fmt.Sprintf("Table_%d", nEpochs)
-// 	server := new(server.Server)
-
-// 	fmt.Println("initializing sql", time.Now())
-// 	columnNames := server.InitializeSqlTable(filename, tablename)
-
-// 	fmt.Println("initializing tree", time.Now())
-// 	server.InitializeTree(columnNames, tablename, 0, 3, 4, 6, []uint32{1, 2})
-
-// 	fmt.Println(time.Now())
-// 	fmt.Printf("n: %d size: %d\n", nEpochs*100, server.GetStorageCost())
-// }

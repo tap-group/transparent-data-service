@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"reflect"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/tap-group/tdsvc/crypto/bulletproofs"
@@ -35,6 +36,10 @@ func (client *Client) GetLatestTimestamps() (int64, int64, int64, int64, int64) 
 	return client.prefixSendRequestTime, client.prefixReceiveResponseTime, client.querySendRequestTime, client.queryReceiveResponseTime, client.finishTime
 }
 
+func (client *Client) GetProcessingTime() int64 {
+	return client.finishTime - client.queryReceiveResponseTime
+}
+
 func (client *Client) ResetTimestamps() {
 	client.prefixSendRequestTime = time.Now().UnixNano()
 	client.prefixReceiveResponseTime = time.Now().UnixNano()
@@ -53,6 +58,10 @@ func (client *Client) addBandwidthUse(k int) {
 
 func (client *Client) GetBandwidthUse() int {
 	return client.bandwidth
+}
+
+func (client *Client) GetServer() server.IServer {
+	return client.server
 }
 
 func (client *Client) SetServer(s server.IServer) {
@@ -295,8 +304,10 @@ func (client *Client) requestAndVerifySumAndCount(valRange [][]uint32) (int, int
 
 	C, _ := p256.CommitG1(big.NewInt(int64(valSum)), big.NewInt(int64(seedSum)), H)
 	valid := C.Equals(totalCommitment)
+
+	client.ResetTimestamps()
+
 	if !valid {
-		client.ResetTimestamps()
 		return -1, -1, errors.New("sum of commitments does not match")
 	}
 
@@ -376,7 +387,13 @@ func verifyInclusionProof(proof *trees.CommitMembershipProof, rootHash []byte, i
 
 	}
 	rebuiltRootHash := proof.RebuildRootHash()
-	return reflect.DeepEqual(rootHash, rebuiltRootHash[:])
+	equal := reflect.DeepEqual(rootHash, rebuiltRootHash[:])
+	if !equal {
+		fmt.Println("error: rebuilt root hash does not match")
+		fmt.Println(rootHash)
+		fmt.Println(rebuiltRootHash[:])
+	}
+	return equal
 }
 
 func (client *Client) requestAndVerifyMin(valRange [][]uint32) (int, error) {
@@ -430,15 +447,26 @@ func (client *Client) requestAndVerifyMin(valRange [][]uint32) (int, error) {
 	fmt.Println("checking proofs... ")
 
 	// check validity of the inclusion proofs
+	var wg sync.WaitGroup
+	valids := make([]bool, n)
 	for i := 0; i < n; i++ {
-		// for the min, all the siblings in the inclusion proof's copath must be on the right, so isLeftSibling must be false everywhere
-		m := len(inclusionProofs[i].Copath)
-		isLeftSibling := make([]bool, m)
-		for j := 0; j < m; j++ {
-			isLeftSibling[j] = false
-		}
-		valid := verifyInclusionProof(inclusionProofs[i], treeroots[i], isLeftSibling)
-		if !valid {
+		wg.Add(1)
+		go func(k int) {
+			defer wg.Done()
+			// for the min, all the siblings in the inclusion proof's copath must be on the right, so isLeftSibling must be false everywhere
+			m := len(inclusionProofs[k].Copath)
+			isLeftSibling := make([]bool, m)
+			for j := 0; j < m; j++ {
+				isLeftSibling[j] = false
+			}
+			valids[k] = verifyInclusionProof(inclusionProofs[k], treeroots[k], isLeftSibling)
+		}(i)
+	}
+
+	wg.Wait()
+	for i := 0; i < len(valids); i++ {
+		if !valids[i] {
+			client.ResetTimestamps()
 			return -1, errors.New("invalid inclusion proof for a commitment tree leaf")
 		}
 	}
@@ -456,8 +484,16 @@ func (client *Client) requestAndVerifyMin(valRange [][]uint32) (int, error) {
 		return -1, errors.New("invalid range proof for the total min")
 	}
 	for i := 0; i < n; i++ {
-		proofValid := verifyLeafProof(rangeProofs[i], inclusionProofs[i], uint32(minVal), server.BP_MAX)
-		if !proofValid {
+		wg.Add(1)
+		go func(k int) {
+			defer wg.Done()
+			valids[k] = verifyLeafProof(rangeProofs[k], inclusionProofs[k], uint32(minVal), server.BP_MAX)
+		}(i)
+	}
+
+	wg.Wait()
+	for i := 0; i < len(valids); i++ {
+		if !valids[i] {
 			client.ResetTimestamps()
 			return -1, errors.New("invalid range proof for a commitment tree min")
 		}
@@ -520,16 +556,25 @@ func (client *Client) requestAndVerifyMax(valRange [][]uint32) (int, error) {
 	fmt.Println("checking proofs... ")
 
 	// check validity of the inclusion proofs
+	var wg sync.WaitGroup
+	valids := make([]bool, n)
 	for i := 0; i < n; i++ {
-		// for the max, all the siblings in the inclusion proof's copath must be on the right, so isLeftSibling must be true everywhere
-		m := len(inclusionProofs[i].Copath)
-		isLeftSibling := make([]bool, m)
-		for j := 0; j < m; j++ {
-			isLeftSibling[j] = true
-		}
-		valid := verifyInclusionProof(inclusionProofs[i], treeroots[i], isLeftSibling)
-		if !valid {
-			client.ResetTimestamps()
+		wg.Add(1)
+		go func(k int) {
+			defer wg.Done()
+			// for the max, all the siblings in the inclusion proof's copath must be on the right, so isLeftSibling must be true everywhere
+			m := len(inclusionProofs[k].Copath)
+			isLeftSibling := make([]bool, m)
+			for j := 0; j < m; j++ {
+				isLeftSibling[j] = true
+			}
+			valids[k] = verifyInclusionProof(inclusionProofs[k], treeroots[k], isLeftSibling)
+		}(i)
+	}
+
+	wg.Wait()
+	for i := 0; i < len(valids); i++ {
+		if !valids[i] {
 			return -1, errors.New("invalid inclusion proof for a commitment tree leaf")
 		}
 	}
@@ -547,9 +592,16 @@ func (client *Client) requestAndVerifyMax(valRange [][]uint32) (int, error) {
 		return -1, errors.New("invalid range proof for the total max")
 	}
 	for i := 0; i < n; i++ {
-		proofValid := verifyLeafProof(rangeProofs[i], inclusionProofs[i], 0, uint32(maxVal)+1)
-		if !proofValid {
-			client.ResetTimestamps()
+		wg.Add(1)
+		go func(k int) {
+			defer wg.Done()
+			valids[k] = verifyLeafProof(rangeProofs[k], inclusionProofs[k], 0, uint32(maxVal)+1)
+		}(i)
+	}
+
+	wg.Wait()
+	for i := 0; i < len(valids); i++ {
+		if !valids[i] {
 			return -1, errors.New("invalid range proof for a commitment tree min")
 		}
 	}
@@ -624,45 +676,55 @@ func (client *Client) requestAndVerifyQuantile(valRange [][]uint32, k int, q int
 	fmt.Print("result: ")
 	fmt.Println(quantile)
 	// check validity of the inclusion proofs
+	var wg sync.WaitGroup
+	mu := &sync.Mutex{}
+	invalids := make([][]bool, n)
 	for i := 0; i < n; i++ {
-		// fmt.Print("left: ")
-		// fmt.Println(inclusionProofsLeft[i].Copath)
-		// fmt.Print("right: ")
-		// fmt.Println(inclusionProofsRight[i].Copath)
-		// left side
-		if len(inclusionProofsLeft[i].Copath) > 0 {
-			inclusionProofValid := verifyInclusionProof(inclusionProofsLeft[i], treeroots[i], nil)
-			if !inclusionProofValid {
-				client.ResetTimestamps()
-				return -1, errors.New("invalid inclusion proof for a commitment tree leaf (left)")
-			}
-			rangeProofValid := verifyLeafProof(rangeProofsLeft[i], inclusionProofsLeft[i], 0, uint32(quantile)+1)
-			if !rangeProofValid {
-				client.ResetTimestamps()
-				return -1, errors.New("invalid range proof for a commitment tree leaf (left)")
-			}
+		wg.Add(1)
+		go func(k int) {
+			defer wg.Done()
+			invalids[k] = make([]bool, 4)
+			// left side
+			if len(inclusionProofsLeft[k].Copath) > 0 {
+				invalids[k][0] = !verifyInclusionProof(inclusionProofsLeft[k], treeroots[k], nil)
+				invalids[k][1] = !verifyLeafProof(rangeProofsLeft[k], inclusionProofsLeft[k], 0, uint32(quantile)+1)
 
-			leftCount += inclusionProofsLeft[i].GetNumLeftNodes() + 1
-		}
-		// right side
-		if len(inclusionProofsRight[i].Copath) > 0 {
-			inclusionProofValid := verifyInclusionProof(inclusionProofsRight[i], treeroots[i], nil)
-			if !inclusionProofValid {
-				client.ResetTimestamps()
-				return -1, errors.New("invalid inclusion proof for a commitment tree leaf (right)")
+				mu.Lock()
+				leftCount += inclusionProofsLeft[k].GetNumLeftNodes() + 1
+				mu.Unlock()
 			}
-			rangeProofValid := verifyLeafProof(rangeProofsRight[i], inclusionProofsRight[i], uint32(quantile), server.BP_MAX)
-			if !rangeProofValid {
-				client.ResetTimestamps()
-				return -1, errors.New("invalid range proof for a commitment tree leaf (right)")
+			// right side
+			if len(inclusionProofsRight[k].Copath) > 0 {
+				invalids[k][2] = !verifyInclusionProof(inclusionProofsRight[k], treeroots[k], nil)
+				invalids[k][3] = !verifyLeafProof(rangeProofsRight[k], inclusionProofsRight[k], uint32(quantile), server.BP_MAX)
+				mu.Lock()
+				rightCount += inclusionProofsRight[k].GetNumRightNodes() + 1
+				mu.Unlock()
 			}
-			rightCount += inclusionProofsRight[i].GetNumRightNodes() + 1
+			// one should always exist, unless the commitment tree is empty, in which case we do not need to increment totalCount
+			mu.Lock()
+			if inclusionProofsLeft[k] != nil {
+				totalCount += inclusionProofsLeft[k].GetTotalNumNodes()
+			} else if inclusionProofsRight[k] != nil {
+				totalCount += inclusionProofsRight[k].GetTotalNumNodes()
+			}
+			mu.Unlock()
+		}(i)
+	}
+
+	wg.Wait()
+	for i := 0; i < len(invalids); i++ {
+		if invalids[i][0] {
+			return -1, errors.New("invalid inclusion proof for a commitment tree leaf " + strconv.Itoa(i) + " (left)")
 		}
-		// one should always exist, unless the commitment tree is empty, in which case we do not need to increment totalCount
-		if inclusionProofsLeft[i] != nil {
-			totalCount += inclusionProofsLeft[i].GetTotalNumNodes()
-		} else if inclusionProofsRight[i] != nil {
-			totalCount += inclusionProofsRight[i].GetTotalNumNodes()
+		if invalids[i][1] {
+			return -1, errors.New("invalid range proof for a commitment tree leaf " + strconv.Itoa(i) + " (left)")
+		}
+		if invalids[i][2] {
+			return -1, errors.New("invalid inclusion proof for a commitment tree leaf " + strconv.Itoa(i) + " (right)")
+		}
+		if invalids[i][3] {
+			return -1, errors.New("invalid range proof for a commitment tree leaf " + strconv.Itoa(i) + " (right)")
 		}
 	}
 

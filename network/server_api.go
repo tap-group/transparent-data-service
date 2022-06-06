@@ -50,12 +50,11 @@ func (s *ServerAPI) Serve(addr string) {
 
 	e.POST(CreateTableWithoutRandomMissingEndpoint, s.CreateTableWithoutRandomMissing)
 	e.POST(CreateTableWithRandomMissingEndpoint, s.CreateTableWithRandomMissing)
-	e.POST(CreateTableWithRandomMissingForExperimentEndpoint,
-		s.CreateTableWithRandomMissingForExperiment)
-	e.POST(RegenerateTableWithRandomMissingForExperimentEndpoint,
-		s.RegenerateTableWithRandomMissingForExperiment)
-	e.POST(RegenerateTableWithoutRandomMissingForExperimentEndpoint,
-		s.RegenerateTableWithoutRandomMissingForExperiment)
+	e.POST(CreateTableForExperimentEndpoint,
+		s.CreateTableForExperiment)
+	e.POST(RegenerateTableForExperimentEndpoint,
+		s.RegenerateTableForExperiment)
+
 	e.POST(CreateExample2TableEndpoint, s.CreateExample2Table)
 
 	e.POST(ResetDurationsEndpoint, s.ResetDurations)
@@ -205,38 +204,26 @@ func (s *ServerAPI) CreateTableWithRandomMissing(c echo.Context) error {
 	return c.NoContent(http.StatusOK)
 }
 
-func (s *ServerAPI) CreateTableWithRandomMissingForExperiment(c echo.Context) error {
+func (s *ServerAPI) CreateTableForExperiment(c echo.Context) error {
 	var request CreateTableRequest
 	if err := c.Bind(&request); err != nil {
 		return err
 	}
-	s.factory.CreateTableWithRandomMissingForExperiment(
+	s.factory.CreateTableForExperiment(
 		request.Filename, request.NUsers, request.NDistricts, request.NTimeslots,
-		request.StartTime, request.MissFreq, request.MaxPower, request.Mode,
+		request.StartTime, request.MissFreq, request.IndustryFreq, request.MaxPower, request.Mode, request.Nonce,
 	)
 	return c.NoContent(http.StatusOK)
 }
 
-func (s *ServerAPI) RegenerateTableWithRandomMissingForExperiment(c echo.Context) error {
+func (s *ServerAPI) RegenerateTableForExperiment(c echo.Context) error {
 	var request RegenerateTableRequest
 	if err := c.Bind(&request); err != nil {
 		return err
 	}
-	s.factory.RegenerateTableWithRandomMissingForExperiment(
+	s.factory.RegenerateTableForExperiment(
 		request.Filename, request.NTimeslots,
-		request.StartTime, request.MissFreq, request.MaxPower, request.Mode,
-	)
-	return c.NoContent(http.StatusOK)
-}
-
-func (s *ServerAPI) RegenerateTableWithoutRandomMissingForExperiment(c echo.Context) error {
-	var request RegenerateTableRequest
-	if err := c.Bind(&request); err != nil {
-		return err
-	}
-	s.factory.RegenerateTableWithoutRandomMissingForExperiment(
-		request.Filename, request.NTimeslots,
-		request.StartTime, request.MaxPower, request.Mode,
+		request.StartTime, request.MissFreq, request.MaxPower, request.Mode, request.Nonce,
 	)
 	return c.NoContent(http.StatusOK)
 }

@@ -6,6 +6,8 @@ import (
 	"math"
 	"math/big"
 	"reflect"
+	"strconv"
+	"sync"
 
 	"github.com/tap-group/tdsvc/crypto/bulletproofs"
 	"github.com/tap-group/tdsvc/crypto/p256"
@@ -96,15 +98,21 @@ func (auditor *Auditor) CheckPrefixTree(nColumns int) bool {
 func (auditor *Auditor) CheckAllCommitTrees(valRange [][]uint32) bool {
 	auditor.RequestAndBuildPrefixTree(valRange)
 
+	var wg sync.WaitGroup
 	n := len(auditor.prefixes)
+	valids := make([]bool, n)
 	for i := 0; i < n; i++ {
-		fmt.Print("tree ")
-		fmt.Print(i)
-		fmt.Print("/")
-		fmt.Print(n)
-		fmt.Print(", ")
-		valid := auditor.CheckCommitTree(auditor.prefixes[i], auditor.commitmentTreeRoots[i])
-		if !valid {
+		wg.Add(1)
+		go func(k int) {
+			defer wg.Done()
+			fmt.Print("tree " + strconv.Itoa(k) + "/" + strconv.Itoa(n) + ", ")
+			valids[k] = auditor.CheckCommitTree(auditor.prefixes[k], auditor.commitmentTreeRoots[k])
+		}(i)
+	}
+	wg.Wait()
+	fmt.Println()
+	for i := 0; i < len(valids); i++ {
+		if !valids[i] {
 			return false
 		}
 	}

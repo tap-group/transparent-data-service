@@ -5,6 +5,8 @@ var (
 	GetLatestTimestampsEndpoint   = "/timestamps"
 	GetPrefixTreeRootHashEndpoint = "/prefix_tree_root"
 	GetStorageCostEndpoint        = "/storage_cost"
+	GetBuildTreeTimeEndpoint      = "/tree_time"
+	GetBuildProofsTimeEindpoint   = "/proofs_time"
 
 	AddToSqlTableEndpoint      = "/add_to_sql"
 	InitializeSqlTableEndpoint = "/init_sql"
@@ -21,12 +23,11 @@ var (
 	RequestMaxAndProofsEndpoint      = "/max_proofs"
 	RequestQuantileAndProofsEndpoint = "/quantile_proofs"
 
-	CreateTableWithoutRandomMissingEndpoint                  = "/create_table_no_missing"
-	CreateTableWithRandomMissingEndpoint                     = "/create_table_missing"
-	CreateTableWithRandomMissingForExperimentEndpoint        = "/create_table_missing_exp"
-	RegenerateTableWithRandomMissingForExperimentEndpoint    = "/regenerate_table"
-	RegenerateTableWithoutRandomMissingForExperimentEndpoint = "/regenerate_table_no_miss"
-	CreateExample2TableEndpoint                              = "/create_eg_table"
+	CreateTableWithoutRandomMissingEndpoint = "/create_table_no_missing"
+	CreateTableWithRandomMissingEndpoint    = "/create_table_missing"
+	CreateTableForExperimentEndpoint        = "/create_experiment_table"
+	RegenerateTableForExperimentEndpoint    = "/regenerate_experiment_table"
+	CreateExample2TableEndpoint             = "/create_eg_table"
 
 	ResetDurationsEndpoint = "/reset_duration"
 )

@@ -52,6 +52,22 @@ func (rs *RemoteServer) GetStorageCost() int {
 	return ret
 }
 
+func (rs *RemoteServer) GetBuildTreeTime() int64 {
+	data := rs.sendRequest(GetBuildTreeTimeEndpoint, nil)
+	var ret int64
+	err := json.Unmarshal(data, &ret)
+	check(err)
+	return ret
+}
+
+func (rs *RemoteServer) GetBuildProofsTime() int64 {
+	data := rs.sendRequest(GetBuildProofsTimeEindpoint, nil)
+	var ret int64
+	err := json.Unmarshal(data, &ret)
+	check(err)
+	return ret
+}
+
 func (rs *RemoteServer) AddToSqlTable(filename string, tableName string) []string {
 	payload, _ := json.Marshal(SqlTableRequest{
 		Filename: filename,

@@ -65,14 +65,16 @@ type QuantileProofResponse struct {
 
 // filename string, nUsers, nDistricts, nTimeslots, startTime, missFreq, maxPower, mode int
 type CreateTableRequest struct {
-	Filename   string
-	NUsers     int
-	NDistricts int
-	NTimeslots int
-	StartTime  int
-	MissFreq   int
-	MaxPower   int
-	Mode       int
+	Filename     string
+	NUsers       int
+	NDistricts   int
+	NTimeslots   int
+	StartTime    int
+	MissFreq     int
+	IndustryFreq int
+	MaxPower     int
+	Mode         int
+	Nonce        int
 }
 
 // filename string, nTimeslots, startTime, missFreq, maxPower, mode int
@@ -83,4 +85,5 @@ type RegenerateTableRequest struct {
 	MissFreq   int
 	MaxPower   int
 	Mode       int
+	Nonce      int
 }

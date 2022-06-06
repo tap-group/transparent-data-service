@@ -28,45 +28,34 @@ func (rf *RemoteTableFactory) CreateTableWithRandomMissing(filename string) {
 	rf.server.sendRequest(CreateTableWithRandomMissingEndpoint, payload)
 }
 
-func (rf *RemoteTableFactory) CreateTableWithRandomMissingForExperiment(
-	filename string, nUsers, nDistricts, nTimeslots, startTime, missFreq, maxPower, mode int,
+func (rf *RemoteTableFactory) CreateTableForExperiment(
+	filename string, nUsers, nDistricts, nTimeslots, startTime, missFreq, IndustryFreq, maxPower, mode, nonce int,
 ) {
 	payload, _ := json.Marshal(CreateTableRequest{
-		Filename:   filename,
-		NUsers:     nUsers,
-		NDistricts: nDistricts,
-		NTimeslots: nTimeslots,
-		StartTime:  startTime,
-		MissFreq:   missFreq,
-		MaxPower:   maxPower,
-		Mode:       mode,
+		Filename:     filename,
+		NUsers:       nUsers,
+		NDistricts:   nDistricts,
+		NTimeslots:   nTimeslots,
+		StartTime:    startTime,
+		MissFreq:     missFreq,
+		IndustryFreq: IndustryFreq,
+		MaxPower:     maxPower,
+		Mode:         mode,
+		Nonce:        nonce,
 	})
-	rf.server.sendRequest(CreateTableWithRandomMissingForExperimentEndpoint, payload)
+	rf.server.sendRequest(CreateTableForExperimentEndpoint, payload)
 }
 
-func (rf *RemoteTableFactory) RegenerateTableWithRandomMissingForExperiment(
-	filename string, nTimeslots, startTime, missFreq, maxPower, mode int,
-) {
-	payload, _ := json.Marshal(RegenerateTableRequest{
-		Filename:   filename,
-		NTimeslots: nTimeslots,
-		StartTime:  startTime,
-		MissFreq:   missFreq,
-		MaxPower:   maxPower,
-		Mode:       mode,
-	})
-	rf.server.sendRequest(RegenerateTableWithRandomMissingForExperimentEndpoint, payload)
-}
-
-func (rf *RemoteTableFactory) RegenerateTableWithoutRandomMissingForExperiment(filename string, nTimeslots, startTime, maxPower, mode int) {
+func (rf *RemoteTableFactory) RegenerateTableForExperiment(filename string, nTimeslots, startTime, missFreq, maxPower, mode, nonce int) {
 	payload, _ := json.Marshal(RegenerateTableRequest{
 		Filename:   filename,
 		NTimeslots: nTimeslots,
 		StartTime:  startTime,
 		MaxPower:   maxPower,
 		Mode:       mode,
+		Nonce:      nonce,
 	})
-	rf.server.sendRequest(RegenerateTableWithoutRandomMissingForExperimentEndpoint, payload)
+	rf.server.sendRequest(RegenerateTableForExperimentEndpoint, payload)
 }
 
 func (rf *RemoteTableFactory) CreateExample2Table(filename string) {
