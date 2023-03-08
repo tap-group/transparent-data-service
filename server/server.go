@@ -844,6 +844,7 @@ func (server *Server) RequestMaxAndProofs(queryPrefixes [][]byte) (int, int, []b
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func(k int) {
+			defer wg.Done()
 			startBuild := time.Now().UnixNano()
 			commitmentTree := trees.BuildMerkleCommitmentTree(vals[k], seeds[k], users[k], times[k])
 			buildTime := time.Now().UnixNano() - startBuild
