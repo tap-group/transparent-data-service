@@ -272,6 +272,7 @@ func (client *Client) requestAndVerifySumAndCount(valRange [][]uint32) (int, int
 	n := len(commitments)
 	totCount := 0
 	init := true
+
 	for i := 0; i < n; i++ {
 		if counts[i] > 0 {
 			totCount += counts[i]

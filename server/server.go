@@ -399,7 +399,9 @@ func (server *Server) determinePrefixes(prefix []byte, uniqueTypeVals [][]uint32
 		return
 	}
 
-	*result = append(*result, SumTreeData{prefix: prefix, timeVal: timeVal, typeVals: typeVals})
+	typeValCopy := make([]uint32, len(typeVals))
+	copy(typeValCopy, typeVals)
+	*result = append(*result, SumTreeData{prefix: prefix, timeVal: timeVal, typeVals: typeValCopy})
 }
 
 func (server *Server) AddToTree(columnNames []string, tableName string, valRange [][]uint32) {

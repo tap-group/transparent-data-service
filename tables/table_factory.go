@@ -163,7 +163,7 @@ func (factory *TableFactory) RegenerateTableForExperiment(filename string, nTime
 
 	for i := 0; i < nTimeslots; i++ {
 		for j := 0; j < nUsers; j++ {
-			fmt.Println(factory.industrial[j])
+			// fmt.Println(factory.industrial[j])
 			miss := 0.
 			if missFreq > 0 {
 				miss = 1. / float64(rand.Intn(missFreq))

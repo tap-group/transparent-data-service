@@ -107,7 +107,7 @@ func runClientQueryCostsPerEpoch(nEpochs int, nUsers int, nDistricts int, output
 	filename := "input/table3.txt"
 	tablename := "Table3"
 
-	factory.CreateTableForExperiment(filename, nUsers, nDistricts, 1, 0, 20, 5, 200, mode, 0) // filename, nUsers, nDistricts, nTimeslots, start time, miss freq., max. power
+	factory.CreateTableForExperiment(filename, nUsers, nDistricts, 1, 0, 0, 5, 200, mode, 0) // filename, nUsers, nDistricts, nTimeslots, start time, miss freq., max. power
 
 	columnNames := server.InitializeSqlTable(filename, tablename)
 	server.InitializeTree(columnNames, tablename, 0, 3, 4, 6, []uint32{1, 2})
@@ -122,7 +122,7 @@ func runClientQueryCostsPerEpoch(nEpochs int, nUsers int, nDistricts int, output
 	result := [][]string{}
 
 	for n := 0; n < nEpochs; n++ {
-		factory.RegenerateTableForExperiment(filename, 1, n+1, 200, 0, mode, 0)
+		factory.RegenerateTableForExperiment(filename, 1, n+1, 0, 200, mode, 0)
 		columnNames = server.AddToSqlTable(filename, tablename)
 		valRange := [][]uint32{{uint32(n + 1), uint32(n + 2)}, {0, math.MaxInt32}, {0, math.MaxInt32}} // only check time slot n+1, and all other entries
 		server.AddToTree(columnNames, tablename, valRange)
@@ -130,9 +130,9 @@ func runClientQueryCostsPerEpoch(nEpochs int, nUsers int, nDistricts int, output
 		startLookup := time.Now().UnixNano()
 		// execute the query
 		var err error
-		queryValRange := [][]uint32{{uint32(n), uint32(n + 10)}, {0, math.MaxInt32}, {0, 1}}
+		queryValRange := [][]uint32{{uint32(n + 1), uint32(n + 2)}, {0, math.MaxInt32}, {0, 1}}
 		if query == LOOKUP {
-			entry := util.ReadCsvFileEntry(filename, rand.Intn(10)+1)
+			entry := util.ReadCsvFileEntry(filename, n+1)
 			_, err = client.LookupQuery(entry[0], entry[3], entry[4], entry[6], []uint32{entry[1], entry[2]})
 		} else if query == SUM {
 			_, err = client.SumQuery(queryValRange)
@@ -650,9 +650,8 @@ func runExperiment5(nEpochs int, nUsers int, nDistricts int) {
 	results = append(results, runTableEntry(5, nUsers, nDistricts, nRepeats, tables.UNIF_ZERO_TO_ND))
 	results = append(results, runTableEntry(10, nUsers, nDistricts, nRepeats, tables.UNIF_ZERO_TO_ND))
 	results = append(results, runTableEntry(20, nUsers, nDistricts, nRepeats, tables.UNIF_ZERO_TO_ND))
-	results = append(results, runTableEntry(40, nUsers, nDistricts, nRepeats, tables.UNIF_ZERO_TO_ND))
-	results = append(results, runTableEntry(80, nUsers, nDistricts, nRepeats, tables.UNIF_ZERO_TO_ND))
-	results = append(results, runTableEntry(160, nUsers, nDistricts, nRepeats, tables.UNIF_ZERO_TO_ND))
+	results = append(results, runTableEntry(50, nUsers, nDistricts, nRepeats, tables.UNIF_ZERO_TO_ND))
+	results = append(results, runTableEntry(100, nUsers, nDistricts, nRepeats, tables.UNIF_ZERO_TO_ND))
 	writeCsvFile("output/experiment5.csv", []string{"storage", "insert", "lookup", "auditor", "sum", "min", "quantile"}, results)
 }
 
