@@ -1,6 +1,6 @@
 # Transparent Data Service
 
-This repository contains a reference implementation of TAP: Transparent and Privacy-Preserving Data Services. The code in this repository can be used to reproduce the experimental results from Section 6 of [the paper][https://www.usenix.org/system/files/sec23summer_125-reijsbergen-prepub.pdf].
+This repository contains a reference implementation of TAP: Transparent and Privacy-Preserving Data Services. The code in this repository can be used to reproduce the experimental results from Section 6 of [the paper](https://www.usenix.org/system/files/sec23summer_125-reijsbergen-prepub.pdf).
 
 WARNING: This is an academic prototype, and should not be used in applications without code review.
 
