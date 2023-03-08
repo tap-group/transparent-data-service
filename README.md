@@ -1,12 +1,16 @@
 # Transparent Data Service
 
+This repository contains a reference implementation of TAP: Transparent and Privacy-Preserving Data Services. The code in this repository can be used to reproduce the experimental results from Section 6 of [the paper][https://www.usenix.org/system/files/sec23summer_125-reijsbergen-prepub.pdf].
+
+WARNING: This is an academic prototype, and should not be used in applications without code review.
+
 ## How to run
 
 ### Dependencies
 
 #### MySQL
-Install MySQL and create a database `integridb`.
-Make sure the database is accessable with user `root` without password.
+Install MySQL and create a database with name `tap`.
+Make sure the database is accessable with user `root` without a password.
 
 #### Golang
 Install golang 1.16 or later.
